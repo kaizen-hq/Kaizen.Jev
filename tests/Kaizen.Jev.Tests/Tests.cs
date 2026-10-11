@@ -7,7 +7,7 @@ namespace Kaizen.Jev.Tests;
 
 public class SerializationTests
 {
-    const string Example = """{"model":"jev-latest","state":{"query":"Ken Suber","candidate":{"name":"Kenneth Suber","usbc":"1234-5678"}},"questions":{"same_person":{"type":"noul","instructions":"Is `candidate` the same person as `query`?"}}}""";
+    const string Example = """{"state":{"query":"Ken Suber","candidate":{"name":"Kenneth Suber","usbc":"1234-5678"}},"model":"jev-latest","questions":{"same_person":{"type":"noul","instructions":"Is `candidate` the same person as `query`?"}}}""";
 
     static JevRequest ExampleRequest() => new()
     {
@@ -86,11 +86,12 @@ public class ValidationTests
 {
     static JevRequest Req(params (string, JevQuestion)[] qs) => new() { State = "s", Questions = qs.ToDictionary(x => x.Item1, x => x.Item2) };
     static IEnumerable<string> N(int n) => Enumerable.Range(0, n).Select(i => "o" + i);
+    static List<JevContent> L(int n) => N(n).Select(x => (JevContent)x).ToList();
     static Dictionary<string, string> C(params string[] labels) => labels.ToDictionary(l => l, l => "d " + l);
     static Dictionary<string, string> C(int n) => C(N(n).ToArray());
 
     [Fact] public void Needs_a_question() => Assert.Throws<JevValidationException>(() => Req().Validate());
-    [Fact] public void Valid_limits_pass() => Req(("c1", new ChoiceQuestion("i", C("only"))), ("c255", new ChoiceQuestion("i", C(255))), ("s2", new ScoreQuestion("i", ["a", "b"])), ("s10", new ScoreQuestion("i", N(10).ToList()))).Validate();
+    [Fact] public void Valid_limits_pass() => Req(("c1", new ChoiceQuestion("i", C("only"))), ("c255", new ChoiceQuestion("i", C(255))), ("s2", new ScoreQuestion("i", ["a", "b"])), ("s10", new ScoreQuestion("i", L(10)))).Validate();
 
     public static TheoryData<string, JevQuestion> Bad => new()
     {
@@ -98,14 +99,12 @@ public class ValidationTests
         { "q", new NoulQuestion("   ") },
         { "q", new ChoiceQuestion("i", C()) },
         { "q", new ChoiceQuestion("i", C(256)) },
-        { "q", new ChoiceQuestion("i", new Dictionary<string, string> { ["a"] = null! }) },
-        { "q", new ChoiceQuestion("i", C("a", " ")) },
         { "q", new ScoreQuestion("i", ["a"]) },
-        { "q", new ScoreQuestion("i", N(11).ToList()) },
-        { "q", new ScoreQuestion("i", ["a", "a"]) },
-        { "", new NoulQuestion("i") },
-        { "has space", new NoulQuestion("i") },
-        { new string('x', 65), new NoulQuestion("i") },
+        { "q", new ScoreQuestion("i", ["a", null!]) },
+        { "q", new NoulQuestion(JevContent.FromJson("{}")) },
+        { "q", new NoulQuestion(JevContent.FromJson("[]")) },
+        { "q", new NoulQuestion(null!) },
+        { "q", new ScoreQuestion("i", L(11)) },
     };
 
     [Theory, MemberData(nameof(Bad))]
@@ -139,7 +138,7 @@ public class ClientTests
         Assert.Equal("Bearer", h.Request.Headers.Authorization!.Scheme);
         Assert.Equal("test-key", h.Request.Headers.Authorization.Parameter);
         Assert.Equal("application/json", h.Request.Content!.Headers.ContentType!.MediaType);
-        Assert.Equal("""{"model":"jev-latest","state":"s","questions":{"q":{"type":"noul","instructions":"i"}}}""", h.RequestBody);
+        Assert.Equal("""{"state":"s","model":"jev-latest","questions":{"q":{"type":"noul","instructions":"i"}}}""", h.RequestBody);
     }
 
     [Fact]

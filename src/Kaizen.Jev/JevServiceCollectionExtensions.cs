@@ -17,7 +17,8 @@ public static class JevServiceCollectionExtensions
         services.AddOptions<JevClientOptions>()
             .Configure(configure)
             .Validate(o => !string.IsNullOrWhiteSpace(o.ApiKey), "Jev ApiKey is required.")
-            .Validate(o => o.BaseAddress is { IsAbsoluteUri: true }, "Jev BaseAddress must be an absolute URI.");
+            .Validate(o => o.BaseAddress is { IsAbsoluteUri: true }, "Jev BaseAddress must be an absolute URI.")
+            .Validate(o => o.MaxRetries >= 0 && o.RetryBaseDelay >= TimeSpan.Zero && o.MaxRetryDelay >= TimeSpan.Zero, "Jev retry settings must be non-negative.");
         return services.AddHttpClient<IJevClient, JevClient>((sp, http) =>
         {
             var o = sp.GetRequiredService<IOptions<JevClientOptions>>().Value;
