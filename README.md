@@ -16,7 +16,7 @@ using Kaizen.Jev;
 builder.Services.AddJevClient(o =>
 {
     o.ApiKey = builder.Configuration["Jev:ApiKey"]!;          // required
-    // o.BaseAddress = new Uri("https://api.jev.ai/");         // default (see ASSUMPTIONS)
+    // o.BaseAddress = new Uri("https://api.typesafe.ai/");    // default
 })
 .AddStandardResilienceHandler();                               // optional: it returns IHttpClientBuilder
 
@@ -70,6 +70,9 @@ A non-2xx status or an unreadable body throws `JevApiException` with `StatusCode
 
 ## Wire format
 
+The endpoint is `POST https://api.typesafe.ai/v1/systemone` with `Authorization: Bearer <API_KEY>` and `Content-Type: application/json`. `systemone` is currently the API's only operation, so it's the only method on `IJevClient`.
+
+
 Requests use snake_case, omit nulls, and put the `type` discriminator first. The documented example serializes byte for byte:
 
 ```json
@@ -80,15 +83,14 @@ Requests use snake_case, omit nulls, and put the `type` discriminator first. The
 
 ## ASSUMPTIONS (not specified by the API description; confirm against the real API)
 
-1. **Base URL** defaults to `https://api.jev.ai/`. This is a placeholder, so set `BaseAddress` explicitly.
-2. **Request field names** for choice options and score levels are `options` and `levels` (arrays of strings, levels ordered lowest to highest).
-3. **Response envelope**: `{ "model": "...", "results": { "<question name>": {...} }, "usage": { "input_tokens": n } }`. The `results` key name is assumed.
-4. **Result fields**: noul gives `noul` (number 0..1). Choice gives `choice` (the selected option string), `probabilities` and `confidence`. Score gives `score` (number), `probabilities` and `confidence`. An optional echoed `type` is read if present. All of these live on one flat `JevQuestionResult` with nullable fields, so unknown result shapes don't break parsing.
-5. **`probabilities` is an object map** of label to probability (`{"bowling":0.8}`). For score it's keyed by level label. If the API returns an array in option or level order, parsing fails with `JevApiException` and the model needs changing.
-6. **`score` scale** is unspecified (0-based index? 1-based? 0..1?). It's passed through as a raw number.
-7. **Request id header** is read from `x-request-id`, then `request-id`.
-8. **Error body** format is unknown, so it's kept raw in `JevApiException.ResponseBody`.
-9. **Question name rules** (`[A-Za-z0-9_-]{1,64}`) are a client-side choice and may be stricter than the API's.
+1. **Request field names** for choice options and score levels are `options` and `levels` (arrays of strings, levels ordered lowest to highest).
+2. **Response envelope**: `{ "model": "...", "results": { "<question name>": {...} }, "usage": { "input_tokens": n } }`. The `results` key name is assumed.
+3. **Result fields**: noul gives `noul` (number 0..1). Choice gives `choice` (the selected option string), `probabilities` and `confidence`. Score gives `score` (number), `probabilities` and `confidence`. An optional echoed `type` is read if present. All of these live on one flat `JevQuestionResult` with nullable fields, so unknown result shapes don't break parsing.
+4. **`probabilities` is an object map** of label to probability (`{"bowling":0.8}`). For score it's keyed by level label. If the API returns an array in option or level order, parsing fails with `JevApiException` and the model needs changing.
+5. **`score` scale** is unspecified (0-based index? 1-based? 0..1?). It's passed through as a raw number.
+6. **Request id header** is read from `x-request-id`, then `request-id`.
+7. **Error body** format is unknown, so it's kept raw in `JevApiException.ResponseBody`.
+8. **Question name rules** (`[A-Za-z0-9_-]{1,64}`) are a client-side choice and may be stricter than the API's.
 
 ## Building
 
