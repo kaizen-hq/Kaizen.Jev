@@ -24,22 +24,44 @@ builder.Services.AddJevClient(o =>
 var response = await jev.SystemOneAsync(new JevRequest
 {
     // Model defaults to "jev-latest"
-    State = JevState.FromObject(new { query = "Ken Suber", candidate = new { name = "Kenneth Suber", usbc = "1234-5678" } }),
+    State = "Hi, I've been trying to connect my Stripe account for 3 days and the integration keeps failing. I'm losing sales. Please help ASAP.",
     Questions = new Dictionary<string, JevQuestion>
     {
-        ["same_person"] = new NoulQuestion("Is `candidate` the same person as `query`?"),
-        ["sport"]       = new ChoiceQuestion("Which sport is this about?", ["bowling", "golf", "other"]),
-        ["confidence"]  = new ScoreQuestion("How strong is the evidence?", ["none", "weak", "moderate", "strong"]),
+        // choice: label -> description, 1..255 labels, order preserved
+        ["department"] = new ChoiceQuestion("Which team should handle this", new Dictionary<string, string>
+        {
+            ["billing"]   = "Payment or subscription issues",
+            ["technical"] = "Bugs or integration problems",
+            ["sales"]     = "Pricing or account questions",
+        }),
+        // score: 2..10 levels, lowest first
+        ["frustration"] = new ScoreQuestion("How frustrated the customer appears",
+            ["Calm, just stating facts", "Frustrated but civil", "Very angry, strong language"]),
+        // noul: yes/no
+        ["is_urgent"] = new NoulQuestion("The message conveys urgency or time-sensitivity"),
     },
 }, cancellationToken);
 
-response.Model;                          // "jev-1.13.0" (the concrete model)
-response.Results["same_person"].Noul;    // 0..1
-response.Results["sport"].Choice;        // "bowling"
-response.Results["sport"].Probabilities; // { "bowling": 0.8, ... }
-response.Results["confidence"].Score;    // weighted score
-response.Usage?.InputTokens;
-response.RequestId;                      // from x-request-id / request-id header, if sent
+response.Model;                                      // "jev-1.13.0" (concrete model for jev-latest)
+
+var dept = response.GetAnswer<ChoiceAnswer>("department");
+dept.Choice;                                         // "technical"
+dept.Confidence;                                     // 0.78
+dept.Probabilities;                                  // { technical: 0.85, sales: 0.0, billing: 0.15 }
+
+var mood = response.GetAnswer<ScoreAnswer>("frustration");
+mood.Score;                                          // 1.0, weighted, on the 0..N-1 index scale
+mood.RoundedIndex;                                   // 1
+mood.RoundedLabel;                                   // "Frustrated but civil" (from legend)
+mood.GetProbability(2);                              // 0.0
+mood.Legend;                                         // { "0": "Calm, just stating facts", ... }
+
+if (response.TryGetAnswer<NoulAnswer>("is_urgent", out var urgent))
+    _ = urgent.Noul;                                 // 1.0
+
+response.Usage?.InputTokens;                         // 392
+response.Usage?.OutputTokens;                        // 65
+response.RequestId;                                  // from x-request-id / request-id header, if sent
 ```
 
 Put all independent questions in **one** request. Jev evaluates them in parallel against a single copy of state, so you pay for the state's input tokens once.
@@ -63,10 +85,16 @@ Without DI: `new JevClient(new HttpClient { BaseAddress = ... }, Options.Create(
 
 - at least one question; names are 1..64 characters of `[A-Za-z0-9_-]`
 - `instructions` must be non-empty
-- `choice`: 1..255 options, unique and non-empty
-- `score`: 2..10 levels, unique and non-empty, lowest first
+- `choice`: `criteria` is a map of label to description with 1..255 entries; labels are non-empty and descriptions non-null
+- `score`: `criteria` is a list of 2..10 unique, non-empty levels, lowest first
 
 A non-2xx status or an unreadable body throws `JevApiException` with `StatusCode`, `ResponseBody` (capped at 64 KB) and `RequestId`. Cancellation surfaces as `OperationCanceledException`. If `ApiKey` is missing, DI options validation fails with `OptionsValidationException`; a hand-built client throws `InvalidOperationException`.
+
+## Answers
+
+`response.Answers` holds polymorphic `JevAnswer` values, also chosen by `type`: `NoulAnswer`, `ChoiceAnswer` or `ScoreAnswer`. Read them with `GetAnswer<T>(name)`, which throws `KeyNotFoundException` or `InvalidCastException` with a clear message, or with `TryGetAnswer<T>(name, out var a)`.
+
+**Forward compatibility:** an answer whose `type` this version doesn't know becomes an `UnknownAnswer`, carrying `Type` and the full `Raw` `JsonElement`, instead of failing the whole response. A request can only produce new answer types if you send new question types, which this version can't build, so tolerance costs nothing and keeps parsing from breaking.
 
 ## Wire format
 
@@ -81,16 +109,16 @@ Requests use snake_case, omit nulls, and put the `type` discriminator first. The
 
 `JevJson.Options` exposes the serializer options. For why questions are polymorphic records rather than C# 15 `union` types, see [docs/union-decision.md](docs/union-decision.md).
 
-## ASSUMPTIONS (not specified by the API description; confirm against the real API)
+## ASSUMPTIONS (still unconfirmed)
 
-1. **Request field names** for choice options and score levels are `options` and `levels` (arrays of strings, levels ordered lowest to highest).
-2. **Response envelope**: `{ "model": "...", "results": { "<question name>": {...} }, "usage": { "input_tokens": n } }`. The `results` key name is assumed.
-3. **Result fields**: noul gives `noul` (number 0..1). Choice gives `choice` (the selected option string), `probabilities` and `confidence`. Score gives `score` (number), `probabilities` and `confidence`. An optional echoed `type` is read if present. All of these live on one flat `JevQuestionResult` with nullable fields, so unknown result shapes don't break parsing.
-4. **`probabilities` is an object map** of label to probability (`{"bowling":0.8}`). For score it's keyed by level label. If the API returns an array in option or level order, parsing fails with `JevApiException` and the model needs changing.
-5. **`score` scale** is unspecified (0-based index? 1-based? 0..1?). It's passed through as a raw number.
-6. **Request id header** is read from `x-request-id`, then `request-id`.
-7. **Error body** format is unknown, so it's kept raw in `JevApiException.ResponseBody`.
-8. **Question name rules** (`[A-Za-z0-9_-]{1,64}`) are a client-side choice and may be stricter than the API's.
+The request and response shapes match a real sample from the API (see `CaptainSampleTests`). These points remain open:
+
+1. **Request id header** is read from `x-request-id`, then `request-id`. The sample didn't show response headers.
+2. **Error body** format is unknown, so it's kept raw in `JevApiException.ResponseBody`.
+3. **Question name rules** (`[A-Za-z0-9_-]{1,64}`) are a client-side choice and may be stricter than the API's.
+4. **Choice criteria descriptions** may be empty strings (only null is rejected). Score criteria must be unique, which is a client-side choice.
+5. **Score rounding** for `RoundedIndex`/`RoundedLabel` uses midpoints away from zero (1.5 gives 2). This is a convenience; `Score` is the raw weighted value.
+6. **Probabilities** are assumed to always be present on choice and score answers. If they're missing, they default to an empty map.
 
 ## Building
 
