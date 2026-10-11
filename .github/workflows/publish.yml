@@ -33,4 +33,4 @@ jobs:
         with:
           user: ${{ vars.NUGET_USER }}
       - name: Push to nuget.org
-        run: dotnet nuget push "artifacts/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --verbosity detailed
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json
