@@ -7,7 +7,7 @@ API reference: <https://docs.typesafe.ai/api> · Models: <https://docs.typesafe.
 ## Install
 
 ```sh
-dotnet add package Kaizen.Jev   # not published yet
+dotnet add package KaizenIO.Jev
 ```
 
 ## Usage
@@ -154,7 +154,7 @@ The docs say errors come with "a JSON body describing what went wrong", but they
 
 ```sh
 dotnet build && dotnet test
-dotnet pack src/Kaizen.Jev/Kaizen.Jev.csproj -c Release -o artifacts   # Kaizen.Jev.0.1.0.nupkg + .snupkg
+dotnet pack src/Kaizen.Jev/Kaizen.Jev.csproj -c Release -o artifacts   # KaizenIO.Jev.0.1.0.nupkg + .snupkg
 ```
 
 The SDK is pinned in `global.json` (.NET 11 RC1). Package versions live in `Directory.Packages.props` (central package management), and shared properties in `Directory.Build.props`. SourceLink comes from the .NET SDK. The build is deterministic, with `ContinuousIntegrationBuild` set on GitHub Actions.

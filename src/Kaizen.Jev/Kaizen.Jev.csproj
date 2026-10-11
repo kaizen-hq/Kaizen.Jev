@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <PackageId>Kaizen.Jev</PackageId>
+    <PackageId>KaizenIO.Jev</PackageId>
     <Version>0.1.0</Version>
     <Description>.NET client for the Jev API (POST /v1/systemone): ask noul (yes/no), choice and score questions about a piece of state in one parallel request.</Description>
     <PackageTags>jev;ai;classification;client;kaizen</PackageTags>
