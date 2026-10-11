@@ -9,12 +9,12 @@ namespace Kaizen.Jev;
 public sealed class JevClientOptions
 {
     /// <summary>The default API base address.</summary>
-    public static readonly Uri DefaultBaseAddress = new("https://api.jev.ai/");
+    public static readonly Uri DefaultBaseAddress = new("https://api.typesafe.ai/");
 
     /// <summary>API key sent as <c>Authorization: Bearer</c>. Required.</summary>
     public string ApiKey { get; set; } = "";
 
-    /// <summary>API base address. Defaults to <see cref="DefaultBaseAddress"/> (assumed; confirm).</summary>
+    /// <summary>API base address. Defaults to <see cref="DefaultBaseAddress"/> (the Jev API host).</summary>
     public Uri BaseAddress { get; set; } = DefaultBaseAddress;
 }
 

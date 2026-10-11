@@ -148,6 +148,19 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task Default_base_address_targets_typesafe_systemone()
+    {
+        var h = FakeHandler.Json(Response);
+        var client = new JevClient(new HttpClient(h), Options.Create(new JevClientOptions { ApiKey = "test-key" }));
+        await client.SystemOneAsync(Req(), CancellationToken.None);
+        Assert.Equal(new Uri("https://api.typesafe.ai/"), JevClientOptions.DefaultBaseAddress);
+        Assert.Equal("https://api.typesafe.ai/v1/systemone", h.Request!.RequestUri!.AbsoluteUri);
+        Assert.Equal(HttpMethod.Post, h.Request.Method);
+        Assert.Equal("Bearer test-key", h.Request.Headers.Authorization!.ToString());
+        Assert.Equal("application/json", h.Request.Content!.Headers.ContentType!.MediaType);
+    }
+
+    [Fact]
     public async Task Parses_noul_choice_score_usage_and_model()
     {
         var r = await Client(FakeHandler.Json(Response, requestId: "req_1")).SystemOneAsync(Req(), CancellationToken.None);
