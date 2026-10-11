@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Kaizen.Jev/Kaizen.Jev.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Kaizen.Jev.Tests/Kaizen.Jev.Tests.csproj" />
+  </Folder>
+</Solution>
