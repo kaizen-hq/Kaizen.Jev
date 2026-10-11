@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
 
 namespace Kaizen.Jev;
@@ -43,8 +44,8 @@ public sealed record JevResponse
     /// <summary>The concrete model that answered, e.g. <c>jev-1.13.0</c> when <c>jev-latest</c> was sent.</summary>
     public string Model { get; init; } = "";
 
-    /// <summary>Results keyed by question name (assumed JSON field: <c>results</c>).</summary>
-    public IReadOnlyDictionary<string, JevQuestionResult> Results { get; init; } = new Dictionary<string, JevQuestionResult>();
+    /// <summary>Answers keyed by question name.</summary>
+    public IReadOnlyDictionary<string, JevAnswer> Answers { get; init; } = new Dictionary<string, JevAnswer>();
 
     /// <summary>Token usage.</summary>
     public JevUsage? Usage { get; init; }
@@ -52,6 +53,23 @@ public sealed record JevResponse
     /// <summary>Request id from the response headers (<c>x-request-id</c> or <c>request-id</c>), if any. Not serialized.</summary>
     [JsonIgnore]
     public string? RequestId { get; init; }
+
+    /// <summary>Gets the answer for <paramref name="name"/> as <typeparamref name="T"/>.</summary>
+    /// <exception cref="KeyNotFoundException">No answer with that name.</exception>
+    /// <exception cref="InvalidCastException">The answer has a different type.</exception>
+    public T GetAnswer<T>(string name) where T : JevAnswer
+    {
+        if (!Answers.TryGetValue(name, out var a))
+            throw new KeyNotFoundException($"No answer named '{name}'. Answers: {string.Join(", ", Answers.Keys)}.");
+        return a as T ?? throw new InvalidCastException($"Answer '{name}' is {a.GetType().Name} (type '{a.Type}'), not {typeof(T).Name}.");
+    }
+
+    /// <summary>Tries to get the answer for <paramref name="name"/> as <typeparamref name="T"/>.</summary>
+    public bool TryGetAnswer<T>(string name, [NotNullWhen(true)] out T? answer) where T : JevAnswer
+    {
+        answer = Answers.TryGetValue(name, out var a) ? a as T : null;
+        return answer is not null;
+    }
 }
 
 /// <summary>Usage reported by Jev.</summary>
@@ -59,25 +77,6 @@ public sealed record JevUsage
 {
     /// <summary>Input tokens consumed (<c>input_tokens</c>).</summary>
     public long InputTokens { get; init; }
-}
-
-/// <summary>
-/// One question's result. Which fields are set depends on the question type:
-/// noul sets <see cref="Noul"/>; choice sets <see cref="Choice"/>, <see cref="Probabilities"/>, <see cref="Confidence"/>;
-/// score sets <see cref="Score"/>, <see cref="Probabilities"/>, <see cref="Confidence"/>. See README ASSUMPTIONS.
-/// </summary>
-public sealed record JevQuestionResult
-{
-    /// <summary>Echoed question type, if the API returns it.</summary>
-    public string? Type { get; init; }
-    /// <summary>noul: probability of "yes", 0..1.</summary>
-    public double? Noul { get; init; }
-    /// <summary>choice: the selected option.</summary>
-    public string? Choice { get; init; }
-    /// <summary>score: probability-weighted score.</summary>
-    public double? Score { get; init; }
-    /// <summary>choice/score: probability per option/level label.</summary>
-    public IReadOnlyDictionary<string, double>? Probabilities { get; init; }
-    /// <summary>choice/score: confidence.</summary>
-    public double? Confidence { get; init; }
+    /// <summary>Output tokens produced (<c>output_tokens</c>).</summary>
+    public long OutputTokens { get; init; }
 }

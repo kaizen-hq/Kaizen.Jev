@@ -24,23 +24,29 @@ public abstract record JevQuestion
     }
 }
 
-/// <summary>A yes/no question. The result's <see cref="JevQuestionResult.Noul"/> is 0..1.</summary>
+/// <summary>A yes/no question. The result's <see cref="NoulAnswer.Noul"/> is 0..1.</summary>
 public sealed record NoulQuestion(string Instructions) : JevQuestion(Instructions);
 
-/// <summary>Pick one of 1..255 unique, non-empty options.</summary>
-public sealed record ChoiceQuestion(string Instructions, IReadOnlyList<string> Options) : JevQuestion(Instructions)
+/// <summary>
+/// Pick one of 1..255 labels. <see cref="Criteria"/> maps each label to a description of when it applies;
+/// insertion order is preserved on the wire.
+/// </summary>
+public sealed record ChoiceQuestion(string Instructions, IReadOnlyDictionary<string, string> Criteria) : JevQuestion(Instructions)
 {
-    /// <summary>Maximum number of options Jev accepts.</summary>
-    public const int MaxOptions = 255;
+    /// <summary>Maximum number of criteria (labels) Jev accepts.</summary>
+    public const int MaxCriteria = 255;
 
     internal override void Validate(string name)
     {
         base.Validate(name);
-        if (Options is null || Options.Count == 0)
-            throw new JevValidationException($"Question '{name}': choice needs at least 1 option.", name);
-        if (Options.Count > MaxOptions)
-            throw new JevValidationException($"Question '{name}': choice allows at most {MaxOptions} options, got {Options.Count}.", name);
-        ValidateLabels(name, Options, "option");
+        if (Criteria is null || Criteria.Count == 0)
+            throw new JevValidationException($"Question '{name}': choice needs at least 1 criterion.", name);
+        if (Criteria.Count > MaxCriteria)
+            throw new JevValidationException($"Question '{name}': choice allows at most {MaxCriteria} criteria, got {Criteria.Count}.", name);
+        ValidateLabels(name, Criteria.Keys.ToList(), "criterion label");
+        foreach (var (label, description) in Criteria)
+            if (description is null)
+                throw new JevValidationException($"Question '{name}': criterion '{label}' has a null description.", name);
     }
 
     internal static void ValidateLabels(string name, IReadOnlyList<string> labels, string what)
@@ -56,19 +62,22 @@ public sealed record ChoiceQuestion(string Instructions, IReadOnlyList<string> O
     }
 }
 
-/// <summary>Rate on 2..10 ordered levels (lowest first).</summary>
-public sealed record ScoreQuestion(string Instructions, IReadOnlyList<string> Levels) : JevQuestion(Instructions)
+/// <summary>
+/// Rate on 2..10 ordered levels. <see cref="Criteria"/> describes each level, lowest first;
+/// the answer's score is on the 0..N-1 index scale of this list.
+/// </summary>
+public sealed record ScoreQuestion(string Instructions, IReadOnlyList<string> Criteria) : JevQuestion(Instructions)
 {
     /// <summary>Minimum number of levels.</summary>
-    public const int MinLevels = 2;
+    public const int MinCriteria = 2;
     /// <summary>Maximum number of levels.</summary>
-    public const int MaxLevels = 10;
+    public const int MaxCriteria = 10;
 
     internal override void Validate(string name)
     {
         base.Validate(name);
-        if (Levels is null || Levels.Count < MinLevels || Levels.Count > MaxLevels)
-            throw new JevValidationException($"Question '{name}': score needs {MinLevels}..{MaxLevels} levels, got {Levels?.Count ?? 0}.", name);
-        ChoiceQuestion.ValidateLabels(name, Levels, "level");
+        if (Criteria is null || Criteria.Count < MinCriteria || Criteria.Count > MaxCriteria)
+            throw new JevValidationException($"Question '{name}': score needs {MinCriteria}..{MaxCriteria} criteria, got {Criteria?.Count ?? 0}.", name);
+        ChoiceQuestion.ValidateLabels(name, Criteria, "criterion");
     }
 }

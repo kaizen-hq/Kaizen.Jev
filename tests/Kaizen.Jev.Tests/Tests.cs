@@ -38,14 +38,14 @@ public class SerializationTests
     {
         var q = new Dictionary<string, JevQuestion>
         {
-            ["c"] = new ChoiceQuestion("pick", ["a", "b"]),
+            ["c"] = new ChoiceQuestion("pick", new Dictionary<string, string> { ["b"] = "bee", ["a"] = "ay" }),
             ["s"] = new ScoreQuestion("rate", ["low", "mid", "high"]),
         };
         var json = JsonSerializer.Serialize(q, JevJson.Options);
-        Assert.Equal("""{"c":{"type":"choice","instructions":"pick","options":["a","b"]},"s":{"type":"score","instructions":"rate","levels":["low","mid","high"]}}""", json);
+        Assert.Equal("""{"c":{"type":"choice","instructions":"pick","criteria":{"b":"bee","a":"ay"}},"s":{"type":"score","instructions":"rate","criteria":["low","mid","high"]}}""", json);
         var back = JsonSerializer.Deserialize<Dictionary<string, JevQuestion>>(json, JevJson.Options)!;
-        Assert.Equal(["a", "b"], Assert.IsType<ChoiceQuestion>(back["c"]).Options);
-        Assert.Equal(3, Assert.IsType<ScoreQuestion>(back["s"]).Levels.Count);
+        Assert.Equal(["b", "a"], Assert.IsType<ChoiceQuestion>(back["c"]).Criteria.Keys);
+        Assert.Equal(["low", "mid", "high"], Assert.IsType<ScoreQuestion>(back["s"]).Criteria);
     }
 
     [Fact]
@@ -86,18 +86,20 @@ public class ValidationTests
 {
     static JevRequest Req(params (string, JevQuestion)[] qs) => new() { State = "s", Questions = qs.ToDictionary(x => x.Item1, x => x.Item2) };
     static IEnumerable<string> N(int n) => Enumerable.Range(0, n).Select(i => "o" + i);
+    static Dictionary<string, string> C(params string[] labels) => labels.ToDictionary(l => l, l => "d " + l);
+    static Dictionary<string, string> C(int n) => C(N(n).ToArray());
 
     [Fact] public void Needs_a_question() => Assert.Throws<JevValidationException>(() => Req().Validate());
-    [Fact] public void Valid_limits_pass() => Req(("c1", new ChoiceQuestion("i", ["only"])), ("c255", new ChoiceQuestion("i", N(255).ToList())), ("s2", new ScoreQuestion("i", ["a", "b"])), ("s10", new ScoreQuestion("i", N(10).ToList()))).Validate();
+    [Fact] public void Valid_limits_pass() => Req(("c1", new ChoiceQuestion("i", C("only"))), ("c255", new ChoiceQuestion("i", C(255))), ("s2", new ScoreQuestion("i", ["a", "b"])), ("s10", new ScoreQuestion("i", N(10).ToList()))).Validate();
 
     public static TheoryData<string, JevQuestion> Bad => new()
     {
         { "q", new NoulQuestion("") },
         { "q", new NoulQuestion("   ") },
-        { "q", new ChoiceQuestion("i", []) },
-        { "q", new ChoiceQuestion("i", N(256).ToList()) },
-        { "q", new ChoiceQuestion("i", ["a", "a"]) },
-        { "q", new ChoiceQuestion("i", ["a", " "]) },
+        { "q", new ChoiceQuestion("i", C()) },
+        { "q", new ChoiceQuestion("i", C(256)) },
+        { "q", new ChoiceQuestion("i", new Dictionary<string, string> { ["a"] = null! }) },
+        { "q", new ChoiceQuestion("i", C("a", " ")) },
         { "q", new ScoreQuestion("i", ["a"]) },
         { "q", new ScoreQuestion("i", N(11).ToList()) },
         { "q", new ScoreQuestion("i", ["a", "a"]) },
@@ -120,14 +122,7 @@ public class ValidationTests
 
 public class ClientTests
 {
-    const string Response = """
-    {"model":"jev-1.13.0",
-     "results":{
-       "same_person":{"noul":0.93},
-       "sport":{"choice":"bowling","probabilities":{"bowling":0.8,"golf":0.2},"confidence":0.7},
-       "skill":{"score":3.4,"probabilities":{"1":0.1,"2":0.1,"3":0.2,"4":0.6},"confidence":0.55}},
-     "usage":{"input_tokens":123}}
-    """;
+    const string Response = """{"model": "jev-1.13.0", "answers": {"department": {"type": "choice", "choice": "technical", "confidence": 0.78, "probabilities": {"technical": 0.85, "sales": 0.0, "billing": 0.15}}, "frustration": {"type": "score", "score": 1.0, "confidence": 1.0, "legend": {"0": "Calm, just stating facts", "1": "Frustrated but civil", "2": "Very angry, strong language"}, "probabilities": {"0": 0.0, "1": 1.0, "2": 0.0}}, "is_urgent": {"type": "noul", "noul": 1.0}}, "usage": {"input_tokens": 392, "output_tokens": 65}}""";
 
     static JevClient Client(FakeHandler h, string key = "test-key") =>
         new(new HttpClient(h) { BaseAddress = new Uri("https://jev.test/") }, Options.Create(new JevClientOptions { ApiKey = key }));
@@ -165,14 +160,35 @@ public class ClientTests
     {
         var r = await Client(FakeHandler.Json(Response, requestId: "req_1")).SystemOneAsync(Req(), CancellationToken.None);
         Assert.Equal("jev-1.13.0", r.Model);
-        Assert.Equal(123, r.Usage!.InputTokens);
+        Assert.NotNull(r.Usage);
         Assert.Equal("req_1", r.RequestId);
-        Assert.Equal(0.93, r.Results["same_person"].Noul);
-        Assert.Equal("bowling", r.Results["sport"].Choice);
-        Assert.Equal(0.8, r.Results["sport"].Probabilities!["bowling"]);
-        Assert.Equal(0.7, r.Results["sport"].Confidence);
-        Assert.Equal(3.4, r.Results["skill"].Score);
-        Assert.Equal(4, r.Results["skill"].Probabilities!.Count);
+        Assert.Equal(392, r.Usage.InputTokens);
+        Assert.Equal(65, r.Usage.OutputTokens);
+        Assert.Equal(3, r.Answers.Count);
+
+        var d = r.GetAnswer<ChoiceAnswer>("department");
+        Assert.Equal("choice", d.Type);
+        Assert.Equal("technical", d.Choice);
+        Assert.Equal(0.78, d.Confidence);
+        Assert.Equal(new Dictionary<string, double> { ["technical"] = 0.85, ["sales"] = 0.0, ["billing"] = 0.15 }, d.Probabilities);
+
+        var f = r.GetAnswer<ScoreAnswer>("frustration");
+        Assert.Equal(1.0, f.Score);
+        Assert.Equal(1.0, f.Confidence);
+        Assert.Equal("Very angry, strong language", f.Legend["2"]);
+        Assert.Equal(1, f.RoundedIndex);
+        Assert.Equal("Frustrated but civil", f.RoundedLabel);
+        Assert.Equal("Calm, just stating facts", f.GetLabel(0));
+        Assert.Null(f.GetLabel(3));
+        Assert.Equal(1.0, f.GetProbability(1));
+        Assert.Equal(0.0, f.GetProbability(2));
+
+        Assert.True(r.TryGetAnswer<NoulAnswer>("is_urgent", out var u));
+        Assert.Equal(1.0, u.Noul);
+        Assert.False(r.TryGetAnswer<ChoiceAnswer>("is_urgent", out _));
+        Assert.False(r.TryGetAnswer<NoulAnswer>("missing", out _));
+        Assert.Throws<KeyNotFoundException>(() => r.GetAnswer<NoulAnswer>("missing"));
+        Assert.Throws<InvalidCastException>(() => r.GetAnswer<ScoreAnswer>("is_urgent"));
     }
 
     [Theory]
@@ -234,7 +250,7 @@ public class DiTests
     [Fact]
     public async Task AddJevClient_registers_typed_client_with_options()
     {
-        var h = FakeHandler.Json("""{"model":"jev-1.13.0","results":{},"usage":{"input_tokens":1}}""");
+        var h = FakeHandler.Json("""{"model":"jev-1.13.0","answers":{},"usage":{"input_tokens":1,"output_tokens":0}}""");
         var services = new ServiceCollection();
         IHttpClientBuilder b = services.AddJevClient(o => { o.ApiKey = "k"; o.BaseAddress = new Uri("https://example.test/base"); });
         b.ConfigurePrimaryHttpMessageHandler(() => h);
@@ -254,4 +270,63 @@ public class DiTests
         using var sp = services.BuildServiceProvider();
         Assert.Throws<OptionsValidationException>(() => sp.GetRequiredService<IJevClient>());
     }
+}
+
+public class CaptainSampleTests
+{
+    const string SampleRequest = """{"state": "Hi, I've been trying to connect my Stripe account for 3 days and the integration keeps failing. I'm losing sales. Please help ASAP.", "model": "jev-latest", "questions": {"department": {"type": "choice", "instructions": "Which team should handle this", "criteria": {"billing": "Payment or subscription issues", "technical": "Bugs or integration problems", "sales": "Pricing or account questions"}}, "frustration": {"type": "score", "instructions": "How frustrated the customer appears", "criteria": ["Calm, just stating facts", "Frustrated but civil", "Very angry, strong language"]}, "is_urgent": {"type": "noul", "instructions": "The message conveys urgency or time-sensitivity"}}}""";
+
+    internal static JevRequest Build() => new()
+    {
+        State = "Hi, I've been trying to connect my Stripe account for 3 days and the integration keeps failing. I'm losing sales. Please help ASAP.",
+        Questions = new Dictionary<string, JevQuestion>
+        {
+            ["department"] = new ChoiceQuestion("Which team should handle this", new Dictionary<string, string>
+            {
+                ["billing"] = "Payment or subscription issues",
+                ["technical"] = "Bugs or integration problems",
+                ["sales"] = "Pricing or account questions",
+            }),
+            ["frustration"] = new ScoreQuestion("How frustrated the customer appears",
+                ["Calm, just stating facts", "Frustrated but civil", "Very angry, strong language"]),
+            ["is_urgent"] = new NoulQuestion("The message conveys urgency or time-sensitivity"),
+        },
+    };
+
+    [Fact]
+    public void Sample_request_serializes_equal()
+    {
+        var json = JsonSerializer.Serialize(Build(), JevJson.Options);
+        Assert.True(JsonElement.DeepEquals(JsonDocument.Parse(SampleRequest).RootElement, JsonDocument.Parse(json).RootElement), json);
+        // Criteria order is preserved (billing, technical, sales).
+        Assert.Contains("""{"billing":"Payment or subscription issues","technical":"Bugs or integration problems","sales":"Pricing or account questions"}""", json);
+        // Byte-for-byte modulo whitespace and the model/state key order the captain wrote.
+        Assert.Equal(JsonSerializer.Serialize(JsonSerializer.Deserialize<JevRequest>(SampleRequest, JevJson.Options), JevJson.Options), json);
+        Build().Validate();
+    }
+
+    [Fact]
+    public void Response_round_trips_with_type_first()
+    {
+        var json = """{"model":"jev-1.13.0","answers":{"a":{"type":"noul","noul":0.5},"b":{"type":"choice","choice":"x","confidence":0.1,"probabilities":{"x":1}}},"usage":{"input_tokens":1,"output_tokens":2}}""";
+        var r = JsonSerializer.Deserialize<JevResponse>(json, JevJson.Options)!;
+        Assert.Equal(json, JsonSerializer.Serialize(r, JevJson.Options));
+    }
+
+    [Fact]
+    public void Unknown_answer_type_is_tolerated_and_raw_json_kept()
+    {
+        var r = JsonSerializer.Deserialize<JevResponse>("""{"model":"m","answers":{"x":{"type":"rank","order":["a","b"]}}}""", JevJson.Options)!;
+        var u = r.GetAnswer<UnknownAnswer>("x");
+        Assert.Equal("rank", u.Type);
+        Assert.Equal("b", u.Raw.GetProperty("order")[1].GetString());
+        Assert.Equal("""{"type":"rank","order":["a","b"]}""", JsonSerializer.Serialize<JevAnswer>(u, JevJson.Options));
+    }
+
+    [Theory]
+    [InlineData(0.49, 0)]
+    [InlineData(0.5, 1)]
+    [InlineData(1.6, 2)]
+    public void Score_rounds_to_nearest_index(double score, int index) =>
+        Assert.Equal(index, new ScoreAnswer { Score = score }.RoundedIndex);
 }
