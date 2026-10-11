@@ -145,4 +145,4 @@ One-time setup (captain):
 
 ## License
 
-MIT © Kijana Woodard (the holder may change).
+MIT © 2026 Kaizenio, Inc.
