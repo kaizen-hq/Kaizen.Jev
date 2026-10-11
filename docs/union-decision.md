@@ -1,4 +1,4 @@
-# Why questions are polymorphic records, not C# `union`
+# Why questions and answers are polymorphic records, not C# `union`
 
 Tested 2026-10-11 with SDK 11.0.100-rc.1.26425.128, `LangVersion=preview`, console app (probe source: `union-probe.cs.txt`).
 

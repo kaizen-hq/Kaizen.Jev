@@ -1,6 +1,8 @@
 # Kaizen.Jev
 
-.NET 11 client for the Jev API (`POST /v1/systemone`). You ask typed questions about a piece of state: **noul** (yes/no), **choice** (pick one option) and **score** (ordered levels). Jev answers all of them in parallel in one request.
+.NET 11 client for the [TypeSafe Jev API](https://docs.typesafe.ai/api). You ask typed questions about a piece of state: **noul** (yes/no), **choice** (pick one option) and **score** (rate on a rubric). Jev answers them all in parallel in one request.
+
+API reference: <https://docs.typesafe.ai/api> · Models: <https://docs.typesafe.ai/models> · State: <https://docs.typesafe.ai/concepts/state>
 
 ## Install
 
@@ -15,110 +17,138 @@ using Kaizen.Jev;
 
 builder.Services.AddJevClient(o =>
 {
-    o.ApiKey = builder.Configuration["Jev:ApiKey"]!;          // required
-    // o.BaseAddress = new Uri("https://api.typesafe.ai/");    // default
-})
-.AddStandardResilienceHandler();                               // optional: it returns IHttpClientBuilder
+    o.ApiKey = builder.Configuration["TypeSafe:ApiKey"]!;   // required
+    // o.BaseAddress = new Uri("https://api.typesafe.ai/"); // default
+    // o.MaxRetries = 2;                                    // retries on 429/529, see below
+});                                                         // returns IHttpClientBuilder for extra handlers
 
 // inject IJevClient
 var response = await jev.SystemOneAsync(new JevRequest
 {
-    // Model defaults to "jev-latest"
     State = "Hi, I've been trying to connect my Stripe account for 3 days and the integration keeps failing. I'm losing sales. Please help ASAP.",
+    // Model defaults to JevModels.Latest ("jev-latest")
     Questions = new Dictionary<string, JevQuestion>
     {
-        // choice: label -> description, 1..255 labels, order preserved
         ["department"] = new ChoiceQuestion("Which team should handle this", new Dictionary<string, string>
         {
             ["billing"]   = "Payment or subscription issues",
             ["technical"] = "Bugs or integration problems",
             ["sales"]     = "Pricing or account questions",
         }),
-        // score: 2..10 levels, lowest first
         ["frustration"] = new ScoreQuestion("How frustrated the customer appears",
             ["Calm, just stating facts", "Frustrated but civil", "Very angry, strong language"]),
-        // noul: yes/no
         ["is_urgent"] = new NoulQuestion("The message conveys urgency or time-sensitivity"),
     },
 }, cancellationToken);
 
-response.Model;                                      // "jev-1.13.0" (concrete model for jev-latest)
+response.Model;                                  // "jev-1.13.0", the versioned model that answered
 
 var dept = response.GetAnswer<ChoiceAnswer>("department");
-dept.Choice;                                         // "technical"
-dept.Confidence;                                     // 0.78
-dept.Probabilities;                                  // { technical: 0.85, sales: 0.0, billing: 0.15 }
+dept.Choice;                                     // "technical"
+dept.Confidence;                                 // 0.78
+dept.Probabilities;                              // { technical: 0.85, sales: 0.0, billing: 0.15 }
 
 var mood = response.GetAnswer<ScoreAnswer>("frustration");
-mood.Score;                                          // 1.0, weighted, on the 0..N-1 index scale
-mood.RoundedIndex;                                   // 1
-mood.RoundedLabel;                                   // "Frustrated but civil" (from legend)
-mood.GetProbability(2);                              // 0.0
-mood.Legend;                                         // { "0": "Calm, just stating facts", ... }
+mood.Score;                                      // 1.0, probability-weighted level index (0..N-1)
+mood.RoundedLabel;                               // "Frustrated but civil"
+mood.GetProbability(2);                          // 0.0
+mood.Legend;                                     // { "0": "Calm, just stating facts", ... }
 
 if (response.TryGetAnswer<NoulAnswer>("is_urgent", out var urgent))
-    _ = urgent.Noul;                                 // 1.0
+    _ = urgent.Noul;                             // 1.0
 
-response.Usage?.InputTokens;                         // 392
-response.Usage?.OutputTokens;                        // 65
-response.RequestId;                                  // from x-request-id / request-id header, if sent
+response.Usage?.InputTokens;                     // 392
+response.Usage?.OutputTokens;                    // 65
 ```
 
-Put all independent questions in **one** request. Jev evaluates them in parallel against a single copy of state, so you pay for the state's input tokens once.
+Put all independent questions in **one** request. Jev reads the state once and evaluates every question against it in parallel. Question ids are yours to choose; answers come back under the same ids, and the ids aren't sent to the model.
+
+Without DI: `new JevClient(new HttpClient(), Options.Create(new JevClientOptions { ApiKey = key }))`.
 
 ### State
 
-State is a string, a JSON object, or an array of text:
+A string, a JSON object, or an array of text values:
 
 ```csharp
-JevState a = "free text";                                  // implicit
-JevState b = new[] { "line 1", "line 2" };                 // implicit
-var c = JevState.FromObject(new { id = 1 });               // any POCO/anonymous/dictionary
-var d = JevState.FromJson("""{"id":1}""");                 // raw JSON object
+JevState a = "My card was charged twice.";                                       // string
+var b = JevState.FromObject(new { message = "Charged twice.", order_id = "A-104" }); // object (recommended)
+JevState c = new[] { "Hi", "My customer number is TS1337.", "Charged twice." };   // array of text
+var d = JevState.FromJson("""{"ticket":{"subject":"Duplicate charge"}}""");      // raw JSON object
 ```
 
-Without DI: `new JevClient(new HttpClient { BaseAddress = ... }, Options.Create(new JevClientOptions { ApiKey = key }))`.
+### Questions
 
-## Validation and errors
+`instructions` and every criterion can be a string or structured JSON (`JevContent`). Strings convert implicitly; use `JevContent.FromObject(...)` or `JevContent.FromJson(...)` for structure.
 
-`SystemOneAsync` checks these limits before sending and throws `JevValidationException` (an `ArgumentException` with `QuestionName`):
+```csharp
+// noul: optional descriptions of yes/no
+new NoulQuestion("Does this convey urgency?")
+{
+    Criteria = new NoulCriteria { True = "Explicitly time-sensitive", False = "No urgency expressed" },
+};
 
-- at least one question; names are 1..64 characters of `[A-Za-z0-9_-]`
-- `instructions` must be non-empty
-- `choice`: `criteria` is a map of label to description with 1..255 entries; labels are non-empty and descriptions non-null
-- `score`: `criteria` is a list of 2..10 unique, non-empty levels, lowest first
+// structured instructions: refer to data fields by name in backticks
+new NoulQuestion(JevContent.FromObject(new
+{
+    potential_duplicate = new { name = "John Smith", location = "Oakland, California" },
+    question = "Is the resume for the same person as `potential_duplicate`?",
+}));
 
-A non-2xx status or an unreadable body throws `JevApiException` with `StatusCode`, `ResponseBody` (capped at 64 KB) and `RequestId`. Cancellation surfaces as `OperationCanceledException`. If `ApiKey` is missing, DI options validation fails with `OptionsValidationException`; a hand-built client throws `InvalidOperationException`.
+// choice: option -> description (string, object, array, or null); order preserved
+new ChoiceQuestion("Which team should handle this?", new Dictionary<string, JevContent?>
+{
+    ["billing"] = "Payments, invoicing, refunds",
+    ["technical"] = null,
+});
+
+// score: ordered levels, lowest first
+new ScoreQuestion("How frustrated is the customer?", ["Calm", "Frustrated", "Very angry"]);
+```
+
+### Models
+
+`JevModels.Latest` (`jev-latest`, the default), `JevModels.Preview` (`jev-preview`) and `JevModels.Jev_1_13_0` (`jev-1.13.0`). Aliases move when new releases ship. `response.Model` always reports the versioned id, so pin that id if you've tuned thresholds against a version. `ListModelsAsync()` calls `GET /v1/models`.
 
 ## Answers
 
-`response.Answers` holds polymorphic `JevAnswer` values, also chosen by `type`: `NoulAnswer`, `ChoiceAnswer` or `ScoreAnswer`. Read them with `GetAnswer<T>(name)`, which throws `KeyNotFoundException` or `InvalidCastException` with a clear message, or with `TryGetAnswer<T>(name, out var a)`.
+`response.Answers` holds `JevAnswer` values, selected by their `type`: `NoulAnswer` (`Noul`, 0..1), `ChoiceAnswer` (`Choice`, `Probabilities`, `Confidence`) and `ScoreAnswer` (`Score`, `Legend`, `Probabilities`, `Confidence`).
 
-**Forward compatibility:** an answer whose `type` this version doesn't know becomes an `UnknownAnswer`, carrying `Type` and the full `Raw` `JsonElement`, instead of failing the whole response. A request can only produce new answer types if you send new question types, which this version can't build, so tolerance costs nothing and keeps parsing from breaking.
+- `GetAnswer<T>(id)` throws `KeyNotFoundException` or `InvalidCastException` with a message naming the id and the actual type. `TryGetAnswer<T>(id, out var a)` doesn't throw.
+- `ScoreAnswer.RoundedIndex` and `RoundedLabel` round `Score` to the nearest level (1.5 rounds to 2). `GetLabel(i)` and `GetProbability(i)` look up a level by integer index; a missing level gives `null` or `0`.
+- Missing `Probabilities` or `Legend` maps come back empty rather than null.
+- An answer with a `type` this version doesn't know becomes an `UnknownAnswer` (its `Type` plus the full `Raw` JSON) instead of failing the response. That keeps older clients working if the API adds answer types.
+
+## Validation, errors and retries
+
+Before sending, the client enforces the documented rules and throws `JevValidationException` (an `ArgumentException` with `QuestionName`):
+
+- `model` and `state` are required, with at least one question
+- `instructions` is required and must be non-empty (a blank string, `{}` or `[]` is rejected)
+- choice: 1 to 255 options
+- score: 2 to 10 levels, none null
+
+Token limits (64k per request, 32k for state plus the longest question) are enforced by the server.
+
+A non-2xx status throws `JevApiException`:
+
+| Status | Property | Meaning (per the docs) |
+|---|---|---|
+| 401 | `IsUnauthorized` | Missing or invalid API key |
+| 422 | `IsValidationError` | Request body failed validation; the body names the offending field |
+| 429 | `IsRateLimited` | Rate limit exceeded |
+| 529 | `IsOverloaded` | TypeSafe temporarily overloaded |
+
+The exception always carries `StatusCode`, the raw `ResponseBody` (capped at 64 KB), `RetryAfter`, `Attempts` and `RequestId` (read from `x-request-id`/`request-id` when present). It also fills `ErrorMessage`, `ErrorCode` and `ErrorDetails` from the JSON body when it recognizes the shape: `{"error": "..."}`, `{"error": {"code"|"type", "message"}}`, top-level `message`/`code`, or `{"detail": ...}`. For a 422 detail list like `[{"loc": [...], "msg": ...}]`, `ErrorMessage` reads `body.questions.q.criteria: Field required` and `ErrorDetails` holds the list.
+
+**Retries:** on 429 and 529 the client retries up to `MaxRetries` times (default 2), with exponential backoff and jitter starting at `RetryBaseDelay` (500 ms). When the response has a `retry-after` header, it waits that long instead, capped at `MaxRetryDelay` (30 s). Other statuses fail at once. Set `MaxRetries = 0` if you'd rather use your own policy, e.g. `AddJevClient(...).AddStandardResilienceHandler()`. Cancellation is honored throughout, including during backoff waits, and surfaces as `OperationCanceledException`.
 
 ## Wire format
 
-The endpoint is `POST https://api.typesafe.ai/v1/systemone` with `Authorization: Bearer <API_KEY>` and `Content-Type: application/json`. `systemone` is currently the API's only operation, so it's the only method on `IJevClient`.
+`POST https://api.typesafe.ai/v1/systemone` with `Authorization: Bearer <API_KEY>` and `Content-Type: application/json`. Bodies are snake_case and omit nulls, except choice criteria, where `null` is meaningful. `type` comes first in each question. Request keys go `state`, `model`, `questions`, as in the docs. `JevJson.Options` exposes the serializer options. For why questions and answers are polymorphic records rather than C# 15 `union` types, see [docs/union-decision.md](docs/union-decision.md).
 
+## Open questions
 
-Requests use snake_case, omit nulls, and put the `type` discriminator first. The documented example serializes byte for byte:
-
-```json
-{"model":"jev-latest","state":{"query":"Ken Suber","candidate":{"name":"Kenneth Suber","usbc":"1234-5678"}},"questions":{"same_person":{"type":"noul","instructions":"Is `candidate` the same person as `query`?"}}}
-```
-
-`JevJson.Options` exposes the serializer options. For why questions are polymorphic records rather than C# 15 `union` types, see [docs/union-decision.md](docs/union-decision.md).
-
-## ASSUMPTIONS (still unconfirmed)
-
-The request and response shapes match a real sample from the API (see `CaptainSampleTests`). These points remain open:
-
-1. **Request id header** is read from `x-request-id`, then `request-id`. The sample didn't show response headers.
-2. **Error body** format is unknown, so it's kept raw in `JevApiException.ResponseBody`.
-3. **Question name rules** (`[A-Za-z0-9_-]{1,64}`) are a client-side choice and may be stricter than the API's.
-4. **Choice criteria descriptions** may be empty strings (only null is rejected). Score criteria must be unique, which is a client-side choice.
-5. **Score rounding** for `RoundedIndex`/`RoundedLabel` uses midpoints away from zero (1.5 gives 2). This is a convenience; `Score` is the raw weighted value.
-6. **Probabilities** are assumed to always be present on choice and score answers. If they're missing, they default to an empty map.
+The docs say errors come with "a JSON body describing what went wrong", but they don't give its schema or any request-id header. The client handles the common shapes listed above and always keeps the raw body. Once a real error body is observed, `ErrorCode`/`ErrorMessage` mapping can be narrowed to it.
 
 ## Building
 
@@ -127,7 +157,7 @@ dotnet build && dotnet test
 dotnet pack src/Kaizen.Jev/Kaizen.Jev.csproj -c Release -o artifacts   # Kaizen.Jev.0.1.0.nupkg + .snupkg
 ```
 
-The SDK is pinned in `global.json` (.NET 11 RC1). Package versions live in `Directory.Packages.props` (central package management), and shared properties in `Directory.Build.props`. SourceLink comes from the .NET SDK (no package needed). The build is deterministic, with `ContinuousIntegrationBuild` set on GitHub Actions.
+The SDK is pinned in `global.json` (.NET 11 RC1). Package versions live in `Directory.Packages.props` (central package management), and shared properties in `Directory.Build.props`. SourceLink comes from the .NET SDK. The build is deterministic, with `ContinuousIntegrationBuild` set on GitHub Actions.
 
 If restore hangs on a sandboxed machine during package signature verification, set `NUGET_CERT_REVOCATION_MODE=offline`.
 
